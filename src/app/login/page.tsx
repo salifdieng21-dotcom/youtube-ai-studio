@@ -1,11 +1,25 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { Youtube, Sparkles, ShieldCheck, Zap, Video, Globe } from 'lucide-react';
 
 export default function LoginPage() {
   const { signInWithGoogle, signInDemo, isDemo } = useAuth();
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const err = new URLSearchParams(window.location.search).get('error');
+    if (!err) return;
+    const messages: Record<string, string> = {
+      access_denied: "Vous avez refusé l'autorisation Google.",
+      invalid_state: 'La session de connexion a expiré. Veuillez réessayer.',
+      token_exchange_failed: "Échec de l'échange du code Google. Vérifiez l'URI de redirection dans Google Cloud Console.",
+      userinfo_failed: 'Impossible de récupérer votre profil Google.',
+      not_configured: "La connexion Google n'est pas configurée sur le serveur.",
+    };
+    setAuthError(messages[err] || `Erreur de connexion Google : ${err}`);
+  }, []);
 
   return (
     <div className="min-h-screen bg-studio-dark flex flex-col items-center justify-center p-4 relative overflow-hidden">
@@ -38,6 +52,12 @@ export default function LoginPage() {
             <h2 className="text-lg font-bold text-white">Connexion à votre Studio</h2>
             <p className="text-xs text-zinc-400">Connectez-vous avec Google pour accéder à toutes les fonctionnalités</p>
           </div>
+
+          {authError && (
+            <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-center">
+              <p className="text-xs text-red-300">{authError}</p>
+            </div>
+          )}
 
           {/* Google Sign-In Button */}
           <button
@@ -73,7 +93,7 @@ export default function LoginPage() {
           {isDemo && (
             <div className="p-3 rounded-xl bg-amber-500/5 border border-amber-500/15 text-center">
               <p className="text-[11px] text-amber-400/80 leading-relaxed">
-                💡 <strong>Mode hors-ligne :</strong> Supabase n'est pas configuré. La connexion Google sera activée une fois vos clés API ajoutées dans <code className="text-amber-300">.env.local</code>
+                💡 <strong>Mode hors-ligne :</strong> Google OAuth n'est pas configuré. Ajoutez <code className="text-amber-300">GOOGLE_CLIENT_ID</code> et <code className="text-amber-300">GOOGLE_CLIENT_SECRET</code> dans les variables d'environnement.
               </p>
             </div>
           )}

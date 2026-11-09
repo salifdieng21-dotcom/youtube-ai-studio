@@ -7,7 +7,7 @@ import Navbar from '@/components/Navbar';
 import LoginPage from '@/app/login/page';
 
 // Pages that don't require authentication
-const PUBLIC_PATHS = ['/login', '/auth/callback'];
+const PUBLIC_PATHS = ['/login'];
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

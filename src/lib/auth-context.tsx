@@ -1,7 +1,6 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 
 export interface UserProfile {
   id: string;
@@ -14,7 +13,7 @@ export interface UserProfile {
 interface AuthContextType {
   user: UserProfile | null;
   isLoading: boolean;
-  isDemo: boolean; // true when Supabase is not configured
+  isDemo: boolean; // true when Google OAuth is not configured on the server
   signInWithGoogle: () => Promise<void>;
   signInDemo: () => void;
   signOut: () => Promise<void>;
@@ -44,128 +43,67 @@ const DEMO_USER: UserProfile = {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [googleConfigured, setGoogleConfigured] = useState(true);
 
-  const supabaseConfigured = isSupabaseConfigured();
-
-  // ── Boot: check existing session ──
+  // ── Boot: check existing Google session (HTTP-only cookie) ──
   useEffect(() => {
     const init = async () => {
-      // 1. Try Supabase session first
-      if (supabaseConfigured && supabase) {
-        try {
-          const { data: { session } } = await supabase.auth.getSession();
-          if (session?.user) {
-            setUser({
-              id: session.user.id,
-              email: session.user.email || '',
-              fullName: session.user.user_metadata?.full_name || session.user.user_metadata?.name || 'Utilisateur',
-              avatarUrl: session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture || '',
-              provider: 'google'
-            });
-            setIsLoading(false);
-            return;
-          }
-        } catch (e) {
-          console.error('Supabase auth init error:', e);
+      try {
+        const res = await fetch('/api/auth/me', { cache: 'no-store' });
+        const data = await res.json();
+        setGoogleConfigured(Boolean(data.googleConfigured));
+        if (data.user) {
+          localStorage.removeItem(DEMO_USER_KEY);
+          setUser(data.user);
+          setIsLoading(false);
+          return;
         }
+      } catch (e) {
+        console.error('Auth init error:', e);
       }
 
-      // 2. Fallback: check demo session in localStorage
-      if (typeof window !== 'undefined') {
-        const stored = localStorage.getItem(DEMO_USER_KEY);
-        if (stored) {
-          try {
-            setUser(JSON.parse(stored));
-          } catch {}
-        }
+      // Fallback: demo session
+      const stored = localStorage.getItem(DEMO_USER_KEY);
+      if (stored) {
+        try { setUser(JSON.parse(stored)); } catch {}
       }
-
       setIsLoading(false);
     };
-
     init();
+  }, []);
 
-    // Listen for Supabase auth state changes
-    if (supabaseConfigured && supabase) {
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-        if (session?.user) {
-          const profile: UserProfile = {
-            id: session.user.id,
-            email: session.user.email || '',
-            fullName: session.user.user_metadata?.full_name || session.user.user_metadata?.name || 'Utilisateur',
-            avatarUrl: session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture || '',
-            provider: 'google'
-          };
-          setUser(profile);
-        } else {
-          // Only clear if supabase event, keep demo user
-          const stored = typeof window !== 'undefined' ? localStorage.getItem(DEMO_USER_KEY) : null;
-          if (!stored) {
-            setUser(null);
-          }
-        }
-      });
-
-      return () => subscription.unsubscribe();
-    }
-  }, [supabaseConfigured]);
-
-  // ── Sign in with Google via Supabase ──
+  // ── Sign in with Google (server-side OAuth 2.0 + YouTube scopes) ──
   const signInWithGoogle = useCallback(async () => {
-    if (!supabaseConfigured || !supabase) {
+    if (!googleConfigured) {
       alert(
-        'Supabase n\'est pas configuré.\n\n' +
-        'Pour activer la connexion Google :\n' +
-        '1. Créez un projet sur https://supabase.com\n' +
-        '2. Activez le provider Google dans Authentication > Providers\n' +
-        '3. Ajoutez vos clés dans .env.local\n\n' +
+        "La connexion Google n'est pas encore configurée.\n\n" +
+        "Ajoutez GOOGLE_CLIENT_ID et GOOGLE_CLIENT_SECRET dans les variables d'environnement Netlify.\n\n" +
         'En attendant, utilisez le mode Démo pour tester la plateforme.'
       );
       return;
     }
+    const returnTo = window.location.pathname.startsWith('/login') ? '/' : window.location.pathname;
+    window.location.href = `/api/auth/google?returnTo=${encodeURIComponent(returnTo)}`;
+  }, [googleConfigured]);
 
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-        queryParams: {
-          access_type: 'offline',
-          prompt: 'consent',
-        },
-        scopes: 'openid email profile https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly'
-      }
-    });
-
-    if (error) {
-      console.error('Google sign-in error:', error);
-      alert(`Erreur de connexion Google : ${error.message}`);
-    }
-  }, [supabaseConfigured]);
-
-  // ── Sign in with Demo mode (no Supabase needed) ──
+  // ── Demo mode ──
   const signInDemo = useCallback(() => {
     setUser(DEMO_USER);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(DEMO_USER_KEY, JSON.stringify(DEMO_USER));
-    }
+    localStorage.setItem(DEMO_USER_KEY, JSON.stringify(DEMO_USER));
   }, []);
 
   // ── Sign out ──
   const signOut = useCallback(async () => {
-    if (supabaseConfigured && supabase) {
-      await supabase.auth.signOut();
-    }
+    try { await fetch('/api/auth/logout', { method: 'POST' }); } catch {}
     setUser(null);
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem(DEMO_USER_KEY);
-    }
-  }, [supabaseConfigured]);
+    localStorage.removeItem(DEMO_USER_KEY);
+  }, []);
 
   return (
     <AuthContext.Provider value={{
       user,
       isLoading,
-      isDemo: !supabaseConfigured,
+      isDemo: !googleConfigured,
       signInWithGoogle,
       signInDemo,
       signOut
