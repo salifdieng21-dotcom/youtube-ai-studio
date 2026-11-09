@@ -22,9 +22,11 @@ import { Channel, NicheType } from '@/types';
 import { NICHES, CURATED_STOCK_IMAGES } from '@/lib/constants';
 import { StudioStorage } from '@/lib/storage';
 import { AIGeneratorService, ChannelGenerationResult } from '@/lib/ai-generator';
-import { YouTubeClient } from '@/lib/youtube-client';
+import { useAuth } from '@/lib/auth-context';
 
 export default function ChannelsPage() {
+  const { user, signInWithGoogle } = useAuth();
+  const [linkingId, setLinkingId] = useState<string | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
@@ -99,18 +101,62 @@ export default function ChannelsPage() {
     }
   };
 
-  const handleConnectGoogle = (chan: Channel) => {
-    const authUrl = YouTubeClient.getAuthUrl(chan.id);
-    // In demo environment, toggle connection status with confirmation
-    const isMock = confirm("Souhaitez-vous autoriser la connexion via l'API officielle Google OAuth et YouTube Data API v3 ?");
-    if (isMock) {
-      const updated = { 
-        ...chan, 
-        isConnected: true, 
-        youtubeChannelId: `UC_${Math.random().toString(36).substring(2, 10)}` 
+  const handleConnectGoogle = async (chan: Channel) => {
+    // Demo mode: simulated link
+    if (user?.provider !== 'google') {
+      if (confirm("Mode Démo : la liaison sera simulée.\n\nVoulez-vous plutôt vous connecter avec Google pour lier une vraie chaîne YouTube ?")) {
+        await signInWithGoogle();
+        return;
+      }
+      const updated = { ...chan, isConnected: true, youtubeChannelId: `UC_${Math.random().toString(36).substring(2, 10)}` };
+      StudioStorage.saveChannel(updated);
+      setChannels(StudioStorage.getChannels());
+      return;
+    }
+
+    setLinkingId(chan.id);
+    try {
+      const res = await fetch('/api/youtube/channels', { cache: 'no-store' });
+      const data = await res.json();
+      if (res.status === 401) {
+        await signInWithGoogle();
+        return;
+      }
+      if (!res.ok) throw new Error(data.error || 'Erreur YouTube API');
+
+      const ytChannels: Array<{ id: string; title: string; handle?: string; thumbnail?: string; subscribers: number; views: number; videos: number }> = data.channels || [];
+      if (ytChannels.length === 0) {
+        alert("Aucune chaîne YouTube n'est associée à ce compte Google. Créez d'abord une chaîne sur youtube.com.");
+        return;
+      }
+
+      let selected = ytChannels[0];
+      if (ytChannels.length > 1) {
+        const choice = prompt(
+          'Choisissez la chaîne YouTube à lier (numéro) :\n' +
+          ytChannels.map((c, i) => `${i + 1}. ${c.title} ${c.handle ? `(${c.handle})` : ''}`).join('\n'),
+          '1'
+        );
+        const idx = Number(choice) - 1;
+        if (!ytChannels[idx]) return;
+        selected = ytChannels[idx];
+      }
+
+      const updated: Channel = {
+        ...chan,
+        isConnected: true,
+        youtubeChannelId: selected.id,
+        subscribersCount: selected.subscribers,
+        viewsCount: selected.views,
+        videosCount: selected.videos,
+        avatarUrl: selected.thumbnail || chan.avatarUrl,
       };
       StudioStorage.saveChannel(updated);
       setChannels(StudioStorage.getChannels());
+    } catch (err: any) {
+      alert(`Impossible de lier la chaîne YouTube : ${err.message}`);
+    } finally {
+      setLinkingId(null);
     }
   };
 
@@ -182,10 +228,11 @@ export default function ChannelsPage() {
                   ) : (
                     <button
                       onClick={() => handleConnectGoogle(chan)}
+                      disabled={linkingId === chan.id}
                       className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-red-600/15 hover:bg-red-600/25 text-red-400 text-xs font-semibold border border-red-500/30 transition-colors"
                     >
                       <Youtube className="w-3.5 h-3.5 fill-red-400" />
-                      Lier YouTube OAuth
+                      {linkingId === chan.id ? 'Liaison...' : 'Lier YouTube OAuth'}
                     </button>
                   )}
                 </div>
